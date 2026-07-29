@@ -5,6 +5,11 @@
 Static browser editor + a small dependency-free JS library (`engine.js`) for
 quantizing images onto a pixel grid and exporting SVG.
 
+## Wiki
+
+Full docs: **[Gridsmith Wiki](https://github.com/ile1/gridsmith/wiki)**  
+(Getting started, editor guide, engine API, hosted pixelate endpoint, official vs forks.)
+
 ## Official hosted product (supported)
 
 | | |
@@ -15,6 +20,7 @@ quantizing images onto a pixel grid and exporting SVG.
 | **Home** | https://martialgames.net/ |
 | **API** | `POST https://martialgames.net/api/pixelate` |
 | **API guide** | https://martialgames.net/tools/gridsmith/Gridsmith-API-Guide.pdf |
+| **Wiki** | https://github.com/ile1/gridsmith/wiki |
 
 This GitHub repo is the **open frontend / library**. The production API and
 Martial Games site remain under Martial Systems LLC / Martial Games hosting.
