@@ -1,0 +1,13 @@
+Gridsmith
+Copyright (c) 2026 Martial Systems LLC
+https://martialsystems.net/
+https://martialgames.net/
+
+This repository is the open-source editor + pixel-grid library for Gridsmith.
+The official hosted product and API live at martialgames.net (see README).
+
+Third-party / community notes
+-----------------------------
+Default drawing colors use the well-known 16-color PICO-8-style palette
+(exact hex list; community-treated as CC-0). This is not an official Lexaloffle
+product and is not affiliated with Lexaloffle Games.

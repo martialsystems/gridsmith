@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  Gridsmith — image / draw → crisp SVG sprites
+  Copyright (c) 2026 Martial Systems LLC. All rights reserved.
+-->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pixel art → SVG</title>
+  <meta name="description" content="Draw or import a reference, export crisp pixel SVG for games." />
+  <meta name="theme-color" content="#0a0a0b" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="app-header">
+      <div class="app-header-inner">
+        <div class="min-w-0">
+          <p class="eyebrow">Martial Systems LLC</p>
+          <h1>Gridsmith, the retro pixel art to scalable SVG tool</h1>
+        </div>
+        <p class="header-tag">Draw or import a reference, export crisp SVG for your games.</p>
+        <nav class="header-links" aria-label="Martial Games">
+          <a class="exit-link" href="https://martialgames.net/">Home</a>
+          <a class="exit-link" href="https://martialgames.net/#games">More games</a>
+          <a class="exit-link" href="https://martialgames.net/tools/">Tools</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <!-- Left: tools + palette -->
+      <aside class="side side-left" aria-label="Tools">
+        <div class="side-inner" tabindex="0">
+          <section>
+            <h2 class="section-title">Tools</h2>
+            <div class="tool-grid" id="tool-list">
+              <button type="button" class="btn" data-tool="hand">Hand <span class="kbd">H</span></button>
+              <button type="button" class="btn" data-tool="pencil">Pencil <span class="kbd">B</span></button>
+              <button type="button" class="btn" data-tool="eraser">Eraser <span class="kbd">E</span></button>
+              <button type="button" class="btn" data-tool="fill">Fill <span class="kbd">G</span></button>
+              <button type="button" class="btn" data-tool="eyedropper">Eyedropper <span class="kbd">I</span></button>
+            </div>
+          </section>
+
+          <section>
+            <h2 class="section-title">Brush size</h2>
+            <div class="brush-row">
+              <button type="button" class="brush-btn" data-brush="1" title="Single pixel" aria-label="Brush size 1×1: Single pixel">
+                <span class="brush-preview brush-preview-1" aria-hidden="true">
+                  <span class="brush-dot"></span>
+                </span>
+                <span class="brush-label">1×1</span>
+              </button>
+              <button type="button" class="brush-btn" data-brush="2" title="2×2 block" aria-label="Brush size 2×2: 2×2 block">
+                <span class="brush-preview brush-preview-2" aria-hidden="true">
+                  <span class="brush-dot"></span><span class="brush-dot"></span>
+                  <span class="brush-dot"></span><span class="brush-dot"></span>
+                </span>
+                <span class="brush-label">2×2</span>
+              </button>
+              <button type="button" class="brush-btn" data-brush="3" title="Plus shape (5 pixels)" aria-label="Brush size +: Plus shape (5 pixels)">
+                <span class="brush-preview brush-preview-3" aria-hidden="true">
+                  <span></span><span class="brush-dot"></span><span></span>
+                  <span class="brush-dot"></span><span class="brush-dot"></span><span class="brush-dot"></span>
+                  <span></span><span class="brush-dot"></span><span></span>
+                </span>
+                <span class="brush-label">+</span>
+              </button>
+            </div>
+            <p class="hint" style="margin-top:0.4rem">
+              Size of each paint stamp for pencil &amp; eraser. All sizes use the same active color.
+            </p>
+            <div class="color-chip">
+              <span class="sw" id="active-swatch" style="background:#ff004d"></span>
+              <span class="hint" style="margin:0">
+                Active color
+                <span id="active-hex" style="font-family:var(--mono);color:var(--fg);text-transform:uppercase">#ff004d</span>
+              </span>
+            </div>
+          </section>
+
+          <section>
+            <h2 class="section-title">Grid size</h2>
+            <div class="grid-presets" id="grid-presets"></div>
+            <p class="hint" style="margin-top:0.4rem;font-family:var(--mono)" id="grid-label">16×16</p>
+          </section>
+
+          <section>
+            <h2 class="section-title">Edit</h2>
+            <div class="edit-grid">
+              <button type="button" class="btn" id="btn-undo">Undo</button>
+              <button type="button" class="btn" id="btn-redo">Redo</button>
+              <button type="button" class="btn" id="btn-grid">Grid</button>
+              <button type="button" class="btn danger" id="btn-clear">Clear</button>
+            </div>
+          </section>
+
+          <section>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.5rem">
+              <h2 class="section-title" style="margin:0">Palette</h2>
+              <span class="hint" style="margin:0;font-family:var(--mono);text-transform:uppercase" id="palette-source">retro · 16</span>
+            </div>
+            <p class="hint" style="margin-bottom:0.5rem">
+              Pick one active paint color. It applies to pencil, fill, and every brush size — it does not recolor pixels already on the canvas.
+            </p>
+            <div class="swatches" id="swatches"></div>
+            <div class="field" style="margin-top:0.65rem">
+              <label for="color-picker">Custom color</label>
+              <input id="color-picker" type="color" value="#ff004d" />
+            </div>
+            <button type="button" class="btn" id="btn-retro" style="width:100%;margin-top:0.5rem;justify-content:center">
+              Reset 16-color retro palette
+            </button>
+            <p class="hint" id="palette-note" style="margin-top:0.5rem">
+              Default is a 16-color PICO-8-style palette (hex list commonly treated as CC-0). Not an official Lexaloffle product.
+            </p>
+          </section>
+        </div>
+      </aside>
+
+      <!-- Center canvas -->
+      <div class="center">
+        <div class="canvas-wrap" id="canvas-wrap">
+          <div class="canvas-scroll panel-scroll" id="canvas-scroll">
+            <canvas id="pixel-canvas" width="256" height="256" aria-label="Pixel canvas"></canvas>
+          </div>
+          <div class="zoom-bar" aria-label="Zoom">
+            <button type="button" id="btn-zoom-out" title="Zoom out">−</button>
+            <span id="zoom-label">100%</span>
+            <button type="button" id="btn-zoom-in" title="Zoom in">+</button>
+            <button type="button" id="btn-zoom-reset" title="Reset zoom">↺</button>
+          </div>
+        </div>
+        <p class="hint-bar">
+          H hand · B pencil · E eraser · G fill · I dropper · Scroll zoom · Space / middle / Alt-drag pan · ⌘/Ctrl+Z
+        </p>
+      </div>
+
+      <!-- Right: export / import -->
+      <aside class="side side-right" aria-label="Export">
+        <div class="side-inner" tabindex="0">
+          <section>
+            <h2 class="section-title">Export &amp; import</h2>
+            <div class="stack">
+              <button type="button" class="btn primary" id="btn-svg" style="justify-content:center">Download SVG</button>
+              <button type="button" class="btn" id="btn-copy-svg" style="justify-content:center">Copy SVG</button>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.375rem">
+                <button type="button" class="btn" id="btn-json" style="justify-content:center">JSON</button>
+                <button type="button" class="btn" id="btn-copy-json" style="justify-content:center">Copy JSON</button>
+              </div>
+              <button type="button" class="btn ghost" id="btn-sample" style="justify-content:center">Load sample hero</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="range-row">
+              <span class="hint" style="margin:0;text-transform:uppercase;letter-spacing:0.04em;font-weight:500">Import palette size</span>
+              <span class="val" id="max-colors-label">16</span>
+            </div>
+            <input type="range" id="max-colors" min="2" max="256" value="16" aria-label="Import palette size" />
+            <div class="range-ticks">
+              <span>2</span>
+              <button type="button" data-colors="16">16</button>
+              <button type="button" data-colors="64">64</button>
+              <button type="button" data-colors="128">128</button>
+              <span>256</span>
+            </div>
+          </section>
+
+          <label class="btn dashed" style="width:100%;cursor:pointer">
+            <span id="import-label">Import image → analyze palette</span>
+            <input id="file-input" type="file" accept="image/*" class="sr-only" />
+          </label>
+          <p class="hint">
+            Import links the image (centered, aspect preserved). Drawing starts with a 16-color PICO-8-style retro set until you import.
+          </p>
+
+          <!-- Linked image (hidden until import) -->
+          <section class="card" id="linked-card" hidden>
+            <div class="linked-head">
+              <img id="linked-thumb" alt="" width="40" height="40" />
+              <div class="min-w-0" style="flex:1">
+                <p class="hint" style="margin:0;text-transform:uppercase;letter-spacing:0.04em;font-weight:500">Linked image</p>
+                <p class="hint" style="margin:0.15rem 0 0;color:var(--fg-muted)" id="linked-name">Source image</p>
+              </div>
+              <span id="linked-busy" class="hint" hidden>…</span>
+            </div>
+            <div class="toggle-stack">
+              <button type="button" class="toggle-row" id="toggle-refit" aria-pressed="true">
+                <span class="toggle-switch on" aria-hidden="true"><span class="toggle-knob"></span></span>
+                <span>
+                  <span class="toggle-label">Re-fit when grid size changes</span>
+                  <span class="toggle-desc">Re-pixelate the linked image to the new grid (off = crop/pad only)</span>
+                </span>
+              </button>
+              <button type="button" class="toggle-row" id="toggle-auto-pal" aria-pressed="true">
+                <span class="toggle-switch on" aria-hidden="true"><span class="toggle-knob"></span></span>
+                <span>
+                  <span class="toggle-label">Auto-update palette</span>
+                  <span class="toggle-desc">Re-extract colors when palette size changes (2–256)</span>
+                </span>
+              </button>
+            </div>
+            <button type="button" class="btn" id="btn-unlink" style="width:100%;margin-top:0.5rem;justify-content:center">
+              Unlink source image
+            </button>
+          </section>
+
+          <section class="card">
+            <p class="hint" style="margin:0 0 0.35rem;text-transform:uppercase;letter-spacing:0.04em;font-weight:500">
+              Your copyright (optional)
+            </p>
+            <p class="hint" style="margin:0 0 0.5rem">
+              Left blank by default. Fill this in to stamp your name on the SVG you download.
+            </p>
+            <div class="field">
+              <label for="copyright">Your name or studio</label>
+              <input id="copyright" type="text" placeholder="e.g. Jane Doe / Studio Name" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="copyright-year">Year</label>
+              <input id="copyright-year" type="text" value="" placeholder="2026" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="license">License</label>
+              <select id="license">
+                <option value="">None (no license line)</option>
+                <option value="All rights reserved">All rights reserved</option>
+                <option value="CC0 1.0 (public domain)">CC0 1.0 — public domain</option>
+                <option value="CC BY 4.0">CC BY 4.0 — attribution</option>
+                <option value="CC BY-SA 4.0">CC BY-SA 4.0 — share alike</option>
+                <option value="CC BY-NC 4.0">CC BY-NC 4.0 — non-commercial</option>
+                <option value="CC BY-NC-SA 4.0">CC BY-NC-SA 4.0</option>
+                <option value="CC BY-ND 4.0">CC BY-ND 4.0 — no derivatives</option>
+                <option value="MIT">MIT</option>
+                <option value="Apache-2.0">Apache 2.0</option>
+                <option value="Proprietary — contact for use">Proprietary — contact for use</option>
+                <option value="__custom__">Custom…</option>
+              </select>
+            </div>
+            <div class="field" id="custom-license-wrap" hidden>
+              <label for="custom-license">Custom license text</label>
+              <input id="custom-license" type="text" placeholder="Your license terms" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="copyright-url">Your site (optional)</label>
+              <input id="copyright-url" type="url" placeholder="https://" autocomplete="off" />
+            </div>
+            <div class="field">
+              <label for="export-title">Sprite title</label>
+              <input id="export-title" type="text" value="pixel-art" autocomplete="off" />
+            </div>
+            <p class="hint" id="copyright-preview" style="margin-top:0.5rem">
+              No copyright will be written into the SVG until you add a name.
+            </p>
+          </section>
+
+          <p class="status" id="status" role="status"></p>
+          <p class="hint">
+            Agent API: <code style="font-family:var(--mono);color:var(--fg-muted)">POST /api/pixelate</code>
+            ·
+            <a href="https://martialgames.net/tools/gridsmith/Gridsmith-API-Guide.pdf" target="_blank" rel="noopener" style="color:var(--fg-muted)">API guide (PDF)</a>
+            ·
+            <a href="https://martialgames.net/" style="color:var(--fg-muted)">More games</a>
+          </p>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="app-footer">
+      <div class="app-footer-inner">
+        <p>© 2026 Martial Systems LLC</p>
+        <a href="https://martialsystems.net/" target="_blank" rel="noopener noreferrer">martialsystems.net</a>
+      </div>
+    </footer>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
