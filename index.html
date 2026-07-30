@@ -93,6 +93,9 @@
             <h2 class="section-title">Grid size</h2>
             <div class="grid-presets" id="grid-presets"></div>
             <p class="hint" style="margin-top:0.4rem;font-family:var(--mono)" id="grid-label">16×16</p>
+            <p class="hint" style="margin-top:0.35rem">
+              Long-edge pixel count. Importing an image reshapes the canvas to match its aspect (e.g. portrait → tall grid).
+            </p>
           </section>
 
           <section>
@@ -188,7 +191,7 @@
                 <span class="toggle-switch on" aria-hidden="true"><span class="toggle-knob"></span></span>
                 <span>
                   <span class="toggle-label">Re-fit when grid size changes</span>
-                  <span class="toggle-desc">Re-pixelate the linked image to the new grid (off = crop/pad only)</span>
+                  <span class="toggle-desc">Re-pixelate to the new long-edge size; canvas keeps the image’s aspect (off = crop/pad only)</span>
                 </span>
               </button>
               <button type="button" class="toggle-row" id="toggle-auto-pal" aria-pressed="true">

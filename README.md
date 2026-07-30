@@ -62,6 +62,11 @@ python3 -m http.server 8765 --bind 127.0.0.1
 Header links point at **martialgames.net** (Home · Games · More tools) so local
 and forked builds still send people to the official games and tools hub.
 
+**Grid size** chips set the **long-edge** pixel count. Freehand stays square;
+importing an image reshapes the canvas to the source aspect (e.g. 160×256 when
+long edge is 256). Use `gridDimsForMaxEdge(srcW, srcH, maxEdge)` from `engine.js`
+for the same math in scripts.
+
 ## Library usage
 
 ```js

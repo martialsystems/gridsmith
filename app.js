@@ -13,7 +13,8 @@ import {
   quantizeImageSource,
   gridToSvg,
   gridToJson,
-} from "./engine.js?v=median4";
+  gridDimsForMaxEdge,
+} from "./engine.js";
 
 const STORAGE_KEY = "gridsmith_v2";
 const ZOOM_MIN = 0.05;
@@ -156,6 +157,8 @@ function createSampleHero() {
 
 const state = {
   grid: emptyGrid(16, 16),
+  /** Selected long-edge preset (chips). Canvas may be non-square after import. */
+  gridSize: 16,
   palette: [...RETRO_PALETTE],
   paletteSource: "retro",
   color: DEFAULT_COLOR,
@@ -169,6 +172,8 @@ const state = {
   future: [],
   sourceDataUrl: null,
   sourceName: null,
+  sourceW: null,
+  sourceH: null,
   refitOnResize: true,
   autoUpdatePalette: true,
   isReprocessing: false,
@@ -273,6 +278,7 @@ function persist() {
         title: state.title,
         zoom: state.zoom,
         maxColors: state.maxColors,
+        gridSize: state.gridSize,
         tool: state.tool,
         brush: state.brush,
         showGrid: state.showGrid,
@@ -298,6 +304,10 @@ function hydrate() {
           p === null || p === undefined || p === "" || p === "transparent" ? null : p,
         ),
       };
+      state.gridSize =
+        typeof data.gridSize === "number"
+          ? data.gridSize
+          : Math.max(data.width, data.height);
     }
     if (Array.isArray(data.palette) && data.palette.length) {
       state.palette = data.palette;
@@ -312,6 +322,7 @@ function hydrate() {
       state.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, data.zoom));
     }
     if (typeof data.maxColors === "number") state.maxColors = data.maxColors;
+    if (typeof data.gridSize === "number") state.gridSize = data.gridSize;
     if (typeof data.tool === "string") state.tool = data.tool;
     if (typeof data.brush === "number") state.brush = data.brush;
     if (typeof data.showGrid === "boolean") state.showGrid = data.showGrid;
@@ -520,51 +531,88 @@ function zoomReset() {
   setZoom(1);
 }
 
-/** Center existing art when resizing (no linked re-fit). */
-function resizeCentered(size) {
+function updateGridLabel() {
+  const { width, height } = state.grid;
+  const edge = state.gridSize || Math.max(width, height);
+  if (width === height) {
+    el.gridLabel.textContent = `${width}×${height}`;
+  } else {
+    el.gridLabel.textContent = `${width}×${height} · long edge ${edge}`;
+  }
+}
+
+function naturalSize(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () =>
+      resolve({
+        w: img.naturalWidth || img.width || 1,
+        h: img.naturalHeight || img.height || 1,
+      });
+    img.onerror = () => reject(new Error("Could not read image size"));
+    img.src = dataUrl;
+  });
+}
+
+async function ensureSourceSize() {
+  if (state.sourceW && state.sourceH) {
+    return { w: state.sourceW, h: state.sourceH };
+  }
+  if (!state.sourceDataUrl) return null;
+  const sz = await naturalSize(state.sourceDataUrl);
+  state.sourceW = sz.w;
+  state.sourceH = sz.h;
+  return sz;
+}
+
+/** Center existing art into a target grid (no linked re-fit). */
+function resizeCentered(tw, th) {
   pushHistory();
-  const next = emptyGrid(size, size);
+  const next = emptyGrid(tw, th);
   const { width: ow, height: oh, pixels } = state.grid;
-  const offsetX = Math.floor((size - ow) / 2);
-  const offsetY = Math.floor((size - oh) / 2);
+  const offsetX = Math.floor((tw - ow) / 2);
+  const offsetY = Math.floor((th - oh) / 2);
   for (let y = 0; y < oh; y++) {
     for (let x = 0; x < ow; x++) {
       const nx = x + offsetX;
       const ny = y + offsetY;
-      if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
-      next.pixels[ny * size + nx] = pixels[y * ow + x] ?? null;
+      if (nx < 0 || ny < 0 || nx >= tw || ny >= th) continue;
+      next.pixels[ny * tw + nx] = pixels[y * ow + x] ?? null;
     }
   }
   state.grid = next;
   draw();
   persist();
   renderPresets();
-  // Recenter scroll
   requestAnimationFrame(() => {
     el.scroll.scrollLeft = Math.max(0, (el.canvas.width - el.scroll.clientWidth) / 2);
     el.scroll.scrollTop = Math.max(0, (el.canvas.height - el.scroll.clientHeight) / 2);
   });
-  setStatus(`${size}×${size} grid`);
+  setStatus(`${tw}×${th} grid`);
 }
 
-async function reprocessSource({ size, forceExtract } = {}) {
+async function reprocessSource({ maxEdge, forceExtract } = {}) {
   if (!state.sourceDataUrl) return;
-  const width = size ?? state.grid.width;
-  const height = size ?? state.grid.height;
+  const edge =
+    maxEdge ?? state.gridSize ?? Math.max(state.grid.width, state.grid.height);
+  state.gridSize = edge;
   const extract = forceExtract ?? state.autoUpdatePalette;
   state.isReprocessing = true;
   el.linkedBusy.hidden = false;
   el.importLabel.textContent = "Updating…";
   try {
+    const sz = await ensureSourceSize();
+    const { width, height } = gridDimsForMaxEdge(sz.w, sz.h, edge);
     const result = await quantizeImageSource(state.sourceDataUrl, {
       width,
       height,
       maxColors: targetPaletteSize(),
-      fit: "contain",
+      // Grid already matches image aspect — fill cells, no letterbox matte.
+      fit: "stretch",
       extractPalette: extract,
       palette: extract ? undefined : state.palette,
     });
-    if (size == null) pushHistory();
+    if (maxEdge == null) pushHistory();
     state.grid = result.grid;
     if (extract || result.extracted) {
       // Keep maxColors as the pre-import cap; palette may be shorter (up to N).
@@ -578,6 +626,7 @@ async function reprocessSource({ size, forceExtract } = {}) {
     draw();
     persist();
     renderPresets();
+    setStatus(`${width}×${height} · image aspect`, "ok");
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "Reprocess failed", "err");
   } finally {
@@ -588,16 +637,22 @@ async function reprocessSource({ size, forceExtract } = {}) {
 }
 
 function resizeGrid(size) {
+  state.gridSize = size;
   if (state.sourceDataUrl && state.refitOnResize) {
     pushHistory();
-    state.grid = emptyGrid(size, size);
-    draw();
     renderPresets();
-    void reprocessSource({ size });
-    setStatus(`${size}×${size} · re-fitting image…`);
+    void reprocessSource({ maxEdge: size });
+    setStatus(`Long edge ${size} · re-fitting image…`);
     return;
   }
-  resizeCentered(size);
+  if (state.sourceDataUrl && state.sourceW && state.sourceH) {
+    // Linked but re-fit off: keep image aspect, crop/pad pixels only.
+    const { width, height } = gridDimsForMaxEdge(state.sourceW, state.sourceH, size);
+    resizeCentered(width, height);
+    return;
+  }
+  // Freehand / no source: square canvas
+  resizeCentered(size, size);
 }
 
 function renderPresets() {
@@ -607,10 +662,11 @@ function renderPresets() {
     b.type = "button";
     b.className = "chip";
     b.textContent = String(s);
-    if (state.grid.width === s && state.grid.height === s) b.classList.add("active");
+    if (state.gridSize === s) b.classList.add("active");
     b.addEventListener("click", () => resizeGrid(s));
     el.presets.appendChild(b);
   }
+  updateGridLabel();
 }
 
 function downloadText(filename, text, mime) {
@@ -736,12 +792,19 @@ async function importImage(file) {
     const dataUrl = await fileToDataUrl(file);
     state.sourceDataUrl = dataUrl;
     state.sourceName = file.name.slice(0, 80);
+    const nat = await naturalSize(dataUrl);
+    state.sourceW = nat.w;
+    state.sourceH = nat.h;
     updateLinkedUi();
+    const edge =
+      state.gridSize || Math.max(state.grid.width, state.grid.height) || 16;
+    state.gridSize = edge;
+    const { width, height } = gridDimsForMaxEdge(nat.w, nat.h, edge);
     const { grid, palette, extracted } = await quantizeImageSource(dataUrl, {
-      width: state.grid.width,
-      height: state.grid.height,
+      width,
+      height,
       maxColors: targetPaletteSize(),
-      fit: "contain",
+      fit: "stretch",
       extractPalette: true,
     });
     pushHistory();
@@ -754,8 +817,9 @@ async function importImage(file) {
     renderSwatches();
     draw();
     persist();
+    renderPresets();
     setStatus(
-      `Linked image → ${palette.length}-color palette, ${grid.width}×${grid.height}`,
+      `Linked image → ${palette.length}-color palette, ${grid.width}×${grid.height} (image aspect)`,
       "ok",
     );
     track.noteImport();
@@ -769,6 +833,8 @@ async function importImage(file) {
 function clearSourceImage() {
   state.sourceDataUrl = null;
   state.sourceName = null;
+  state.sourceW = null;
+  state.sourceH = null;
   updateLinkedUi();
   setStatus("Source image unlinked");
 }
@@ -892,6 +958,7 @@ function loadSample() {
   pushHistory();
   clearSourceImage();
   state.grid = createSampleHero();
+  state.gridSize = 16;
   resetRetroPalette();
   renderPresets();
   draw();

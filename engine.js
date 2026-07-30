@@ -27,6 +27,25 @@ export const GRID_PRESETS = Object.freeze([8, 12, 16, 24, 32, 48, 64, 128, 256])
 export const MAX_GRID_SIZE = 256;
 
 /**
+ * Map a source aspect ratio onto a pixel grid whose longer edge is `maxEdge`.
+ * Keeps UI presets as a single "size" control while allowing non-square canvases
+ * (e.g. 160×256 portrait when maxEdge is 256).
+ */
+export function gridDimsForMaxEdge(srcW, srcH, maxEdge, hardMax = MAX_GRID_SIZE) {
+  const M = Math.max(2, Math.min(hardMax, Math.round(Number(maxEdge)) || 16));
+  const sw = Math.max(1, Number(srcW) || 1);
+  const sh = Math.max(1, Number(srcH) || 1);
+  if (sw >= sh) {
+    const width = M;
+    const height = Math.max(1, Math.min(hardMax, Math.round((sh / sw) * M)));
+    return { width, height };
+  }
+  const height = M;
+  const width = Math.max(1, Math.min(hardMax, Math.round((sw / sh) * M)));
+  return { width, height };
+}
+
+/**
  * Minimum per-channel range worth splitting a median-cut box.
  * range === 0 alone rarely trips on JPEG/AA noise, so boxes keep splitting into
  * near-identical shades to fill maxColors. Override via options.minSplitRange
