@@ -7,7 +7,7 @@ quantizing images onto a pixel grid and exporting SVG.
 
 ## Wiki
 
-Full docs: **[Gridsmith Wiki](https://github.com/ile1/gridsmith/wiki)**  
+Full docs: **[Gridsmith Wiki](https://github.com/martialsystems/gridsmith/wiki)**  
 (Getting started, editor guide, engine API, hosted pixelate endpoint, official vs forks.)
 
 ## Official hosted product (supported)
@@ -20,7 +20,7 @@ Full docs: **[Gridsmith Wiki](https://github.com/ile1/gridsmith/wiki)**
 | **Home** | https://martialgames.net/ |
 | **API** | `POST https://martialgames.net/api/pixelate` |
 | **API guide** | https://martialgames.net/tools/gridsmith/Gridsmith-API-Guide.pdf |
-| **Wiki** | https://github.com/ile1/gridsmith/wiki |
+| **Wiki** | https://github.com/martialsystems/gridsmith/wiki |
 
 This GitHub repo is the **open frontend / library**. The production API and
 Martial Games site remain under Martial Systems LLC / Martial Games hosting.
