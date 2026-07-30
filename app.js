@@ -13,13 +13,113 @@ import {
   quantizeImageSource,
   gridToSvg,
   gridToJson,
-} from "./engine.js";
+} from "./engine.js?v=median4";
 
 const STORAGE_KEY = "gridsmith_v2";
-const ZOOM_MIN = 0.5;
+const ZOOM_MIN = 0.05;
 const ZOOM_MAX = 12;
 const ZOOM_STEP = 1.07;
 const BASE_CELL = 16;
+
+/** First-party usage analytics → POST /api/t g=gridsmith (no PII) */
+const track = (() => {
+  const T = {
+    sid: "",
+    p: 0,
+    c: 0,
+    b: 0,
+    a: 0,
+    newSession: 1,
+    visibleSince: 0,
+  };
+  function newSid() {
+    try {
+      const a = new Uint8Array(8);
+      crypto.getRandomValues(a);
+      return Array.from(a, (x) => x.toString(16).padStart(2, "0")).join("");
+    } catch {
+      return String(Date.now()) + Math.random().toString(16).slice(2, 8);
+    }
+  }
+  function accrue() {
+    if (T.visibleSince && document.visibilityState === "visible") {
+      const now = Date.now();
+      const sec = Math.floor((now - T.visibleSince) / 1000);
+      if (sec > 0) {
+        T.p += sec;
+        T.visibleSince = now;
+      }
+    }
+  }
+  function flush() {
+    accrue();
+    const payload = {
+      g: "gridsmith",
+      s: T.sid,
+      p: T.p,
+      c: T.c,
+      b: T.b,
+      a: T.a,
+      n: T.newSession,
+    };
+    if (!payload.p && !payload.c && !payload.b && !payload.a && !payload.n) return;
+    T.p = 0;
+    T.c = 0;
+    T.b = 0;
+    T.a = 0;
+    T.newSession = 0;
+    const body = JSON.stringify(payload);
+    try {
+      if (navigator.sendBeacon) {
+        if (
+          navigator.sendBeacon("/api/t", new Blob([body], { type: "application/json" }))
+        ) {
+          return;
+        }
+      }
+    } catch {
+      /* fall through */
+    }
+    try {
+      fetch("/api/t", {
+        method: "POST",
+        body,
+        headers: { "Content-Type": "application/json" },
+        keepalive: true,
+        mode: "cors",
+      }).catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  function start() {
+    T.sid = newSid();
+    T.newSession = 1;
+    if (document.visibilityState === "visible") T.visibleSince = Date.now();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        flush();
+        T.visibleSince = 0;
+      } else {
+        T.visibleSince = Date.now();
+      }
+    });
+    window.addEventListener("pagehide", flush);
+    setInterval(flush, 25000);
+  }
+  return {
+    start,
+    noteExportSvg() {
+      T.c += 1;
+    },
+    noteImport() {
+      T.b += 1;
+    },
+    noteExportJson() {
+      T.a += 1;
+    },
+  };
+})();
 
 function createSampleHero() {
   const g = emptyGrid(16, 16);
@@ -81,8 +181,6 @@ const el = {
   status: document.getElementById("status"),
   presets: document.getElementById("grid-presets"),
   gridLabel: document.getElementById("grid-label"),
-  maxColors: document.getElementById("max-colors"),
-  maxColorsLabel: document.getElementById("max-colors-label"),
   title: document.getElementById("export-title"),
   copyright: document.getElementById("copyright"),
   copyrightYear: document.getElementById("copyright-year"),
@@ -108,7 +206,16 @@ const el = {
 };
 
 const ctx = el.canvas.getContext("2d");
-let maxColorsDebounce = null;
+
+/**
+ * Locked upper bound for palette extraction (import / re-extract).
+ * Pure input to extractPaletteFromImageData — not a “fill to N” request.
+ * Engine returns *up to* this many colors (exact passthrough when the image
+ * has fewer unique flats).
+ */
+function targetPaletteSize() {
+  return Math.min(256, Math.max(2, Number(state.maxColors) || 16));
+}
 
 function cellPx() {
   return Math.max(1, Math.round(BASE_CELL * state.zoom));
@@ -192,7 +299,10 @@ function hydrate() {
         ),
       };
     }
-    if (Array.isArray(data.palette) && data.palette.length) state.palette = data.palette;
+    if (Array.isArray(data.palette) && data.palette.length) {
+      state.palette = data.palette;
+      state.maxColors = data.palette.length;
+    }
     if (data.paletteSource === "image" || data.paletteSource === "retro") {
       state.paletteSource = data.paletteSource;
     }
@@ -327,16 +437,21 @@ function updateActiveColorUi() {
   if (state.color && state.color.startsWith("#")) {
     el.colorPicker.value = state.color;
   }
+  const cap = targetPaletteSize();
   el.paletteSource.textContent =
     state.paletteSource === "image"
-      ? `image · ${state.palette.length}`
+      ? state.palette.length < cap
+        ? `image · ${state.palette.length} (up to ${cap})`
+        : `image · ${state.palette.length}`
       : `retro · ${state.palette.length}`;
   if (state.paletteSource === "image") {
     el.paletteNote.textContent =
-      "Colors extracted from your last import. Drawing uses this set.";
+      state.palette.length < cap
+        ? `Extracted ${state.palette.length} colors from the image (cap ${cap}).`
+        : `Colors extracted from your last import (up to ${cap}). Drawing uses this set.`;
   } else {
     el.paletteNote.textContent =
-      "Default is a 16-color PICO-8-style palette (hex list commonly treated as CC-0). Not an official Lexaloffle product.";
+      "Default is a 16-color PICO-8-style palette (hex list commonly treated as CC-0). Not an official Lexaloffle product. Import uses this as a max color count.";
   }
 }
 
@@ -444,7 +559,7 @@ async function reprocessSource({ size, forceExtract } = {}) {
     const result = await quantizeImageSource(state.sourceDataUrl, {
       width,
       height,
-      maxColors: state.maxColors,
+      maxColors: targetPaletteSize(),
       fit: "contain",
       extractPalette: extract,
       palette: extract ? undefined : state.palette,
@@ -452,6 +567,7 @@ async function reprocessSource({ size, forceExtract } = {}) {
     if (size == null) pushHistory();
     state.grid = result.grid;
     if (extract || result.extracted) {
+      // Keep maxColors as the pre-import cap; palette may be shorter (up to N).
       state.palette = result.palette;
       state.paletteSource = "image";
       state.color =
@@ -507,10 +623,12 @@ function downloadText(filename, text, mime) {
   URL.revokeObjectURL(url);
 }
 
-async function copyText(text, okMsg) {
+async function copyText(text, okMsg, kind) {
   try {
     await navigator.clipboard.writeText(text);
     setStatus(okMsg, "ok");
+    if (kind === "svg") track.noteExportSvg();
+    if (kind === "json") track.noteExportJson();
   } catch {
     setStatus("Clipboard blocked — use Download instead", "err");
   }
@@ -568,6 +686,7 @@ function exportSvg() {
     "ok",
   );
   persist();
+  track.noteExportSvg();
 }
 
 function exportJson() {
@@ -578,6 +697,7 @@ function exportJson() {
     "application/json",
   );
   setStatus("JSON grid downloaded", "ok");
+  track.noteExportJson();
 }
 
 function fileToDataUrl(file) {
@@ -620,12 +740,13 @@ async function importImage(file) {
     const { grid, palette, extracted } = await quantizeImageSource(dataUrl, {
       width: state.grid.width,
       height: state.grid.height,
-      maxColors: state.maxColors,
+      maxColors: targetPaletteSize(),
       fit: "contain",
       extractPalette: true,
     });
     pushHistory();
     state.grid = grid;
+    // maxColors stays the locked cap used for this extract (may be > palette.length)
     state.palette = palette;
     state.paletteSource = extracted ? "image" : "retro";
     state.color =
@@ -637,6 +758,7 @@ async function importImage(file) {
       `Linked image → ${palette.length}-color palette, ${grid.width}×${grid.height}`,
       "ok",
     );
+    track.noteImport();
   } catch (err) {
     setStatus(err instanceof Error ? err.message : "Import failed", "err");
   } finally {
@@ -748,17 +870,18 @@ function applyTool(gx, gy, isDown) {
 }
 
 function clearGrid() {
-  if (!confirm("Clear the entire canvas?")) return;
   pushHistory();
   state.grid = emptyGrid(state.grid.width, state.grid.height);
+  clearSourceImage();
   draw();
   persist();
-  setStatus("Cleared");
+  setStatus("Canvas cleared");
 }
 
 function resetRetroPalette() {
   state.palette = [...RETRO_PALETTE];
   state.paletteSource = "retro";
+  state.maxColors = RETRO_PALETTE.length;
   state.color = DEFAULT_COLOR;
   renderSwatches();
   setStatus("Restored 16-color retro palette");
@@ -775,40 +898,19 @@ function loadSample() {
   setStatus("Sample hero loaded", "ok");
 }
 
-function setMaxColors(n, { reprocess = true } = {}) {
-  const v = Math.min(256, Math.max(2, Math.round(n)));
-  state.maxColors = v;
-  el.maxColors.value = String(v);
-  el.maxColorsLabel.textContent = String(v);
-  if (reprocess && state.sourceDataUrl && state.autoUpdatePalette) {
-    if (maxColorsDebounce) clearTimeout(maxColorsDebounce);
-    maxColorsDebounce = setTimeout(() => {
-      void reprocessSource({ forceExtract: true });
-    }, 280);
-  }
-}
-
 function initUi() {
   el.title.value = state.title;
-  el.maxColors.value = String(state.maxColors);
-  el.maxColorsLabel.textContent = String(state.maxColors);
   if (state.color && state.color.startsWith("#")) {
     el.colorPicker.value = state.color;
   }
-
-  el.maxColors.addEventListener("input", () => {
-    setMaxColors(Number(el.maxColors.value));
-  });
-
-  document.querySelectorAll("[data-colors]").forEach((b) => {
-    b.addEventListener("click", () => setMaxColors(Number(b.dataset.colors)));
-  });
 
   el.colorPicker.addEventListener("input", () => {
     state.color = el.colorPicker.value;
     if (!state.palette.some((c) => c.toLowerCase() === state.color.toLowerCase())) {
       state.palette = [...state.palette, state.color];
       state.paletteSource = "image";
+      // Raising the swatch list also raises the extract cap for next import
+      state.maxColors = Math.max(state.maxColors, state.palette.length);
     }
     renderSwatches();
   });
@@ -834,14 +936,15 @@ function initUi() {
     syncEditButtons();
   });
   document.getElementById("btn-clear").addEventListener("click", clearGrid);
+  document.getElementById("btn-clear-export")?.addEventListener("click", clearGrid);
   document.getElementById("btn-retro").addEventListener("click", resetRetroPalette);
   document.getElementById("btn-svg").addEventListener("click", exportSvg);
   document.getElementById("btn-json").addEventListener("click", exportJson);
   document.getElementById("btn-copy-svg").addEventListener("click", () => {
-    copyText(gridToSvg(state.grid, exportOptions()), "SVG copied to clipboard");
+    copyText(gridToSvg(state.grid, exportOptions()), "SVG copied to clipboard", "svg");
   });
   document.getElementById("btn-copy-json").addEventListener("click", () => {
-    copyText(gridToJson(state.grid, true), "Grid JSON copied");
+    copyText(gridToJson(state.grid, true), "Grid JSON copied", "json");
   });
   document.getElementById("btn-sample").addEventListener("click", loadSample);
   document.getElementById("btn-unlink").addEventListener("click", clearSourceImage);
@@ -969,4 +1072,5 @@ hydrate();
 initUi();
 renderSwatches();
 draw();
+track.start();
 setStatus(`${state.grid.width}×${state.grid.height} · ready`);

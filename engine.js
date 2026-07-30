@@ -26,6 +26,14 @@ export const DEFAULT_COLOR = "#ff004d";
 export const GRID_PRESETS = Object.freeze([8, 12, 16, 24, 32, 48, 64, 128, 256]);
 export const MAX_GRID_SIZE = 256;
 
+/**
+ * Minimum per-channel range worth splitting a median-cut box.
+ * range === 0 alone rarely trips on JPEG/AA noise, so boxes keep splitting into
+ * near-identical shades to fill maxColors. Override via options.minSplitRange
+ * (0 = classic behavior). Default 16 is experimental — tune against real assets.
+ */
+export const MIN_SPLIT_RANGE = 16;
+
 export function hexToRgb(hex) {
   let h = String(hex).replace("#", "").toLowerCase();
   if (h.length === 3) {
@@ -167,6 +175,10 @@ export function extractPaletteFromImageData(imageData, options = {}) {
   const maxColors = Math.max(2, Math.min(256, options.maxColors ?? 16));
   const alphaThreshold = options.alphaThreshold ?? 32;
   const maxSamples = options.maxSamples ?? 8000;
+  const minSplitRange = Math.max(
+    0,
+    Math.min(255, Number(options.minSplitRange ?? MIN_SPLIT_RANGE)),
+  );
 
   const { data, width, height } = imageData;
   const total = width * height;
@@ -210,17 +222,20 @@ export function extractPaletteFromImageData(imageData, options = {}) {
       const box = boxes[i];
       if (box.colors.length < 2) continue;
       const { range } = channelRange(box.colors);
-      if (range === 0) continue;
+      // Near-flat: not worth splitting further (noise vs true color boundary)
+      if (range < minSplitRange) continue;
       const score = range * 1000 + box.colors.length;
       if (score > bestRange) {
         bestRange = score;
         bestIdx = i;
       }
     }
+    // No box has meaningful range left → stop under maxColors
     if (bestIdx < 0) break;
 
     const box = boxes[bestIdx];
-    const { channel } = channelRange(box.colors);
+    const { channel, range } = channelRange(box.colors);
+    if (range < minSplitRange) break;
     const sorted = box.colors.slice().sort((a, b) => a[channel] - b[channel]);
     const mid = Math.floor(sorted.length / 2);
     if (mid === 0 || mid >= sorted.length) break;

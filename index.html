@@ -7,25 +7,32 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Pixel art → SVG</title>
-  <meta name="description" content="Draw or import a reference, export crisp pixel SVG for games." />
+  <title>Gridsmith — pixel art → SVG</title>
+  <meta name="description" content="Draw or import a reference, quantize to a pixel grid, export crisp SVG for games." />
   <meta name="theme-color" content="#0a0a0b" />
+  <meta property="og:title" content="Gridsmith" />
+  <meta property="og:description" content="Pixel grid → crisp SVG. Draw or import, export game-ready sprites." />
+  <meta property="og:image" content="icon.jpg" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon.jpg" />
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <div class="app" id="app">
     <header class="app-header">
       <div class="app-header-inner">
-        <div class="min-w-0">
-          <p class="eyebrow">Martial Systems LLC</p>
-          <h1>Gridsmith, the retro pixel art to scalable SVG tool</h1>
+        <div class="brand-block">
+          <img class="brand-mark" src="favicon.svg" width="32" height="32" alt="" />
+          <div class="min-w-0">
+            <p class="eyebrow">Martial Systems · browser tool</p>
+            <h1>Gridsmith</h1>
+          </div>
         </div>
-        <p class="header-tag">Draw or import a reference, export crisp SVG for your games.</p>
+        <p class="header-tag">Pixel grid → crisp SVG for your games.</p>
         <nav class="header-links" aria-label="Martial Games">
           <a class="exit-link" href="https://martialgames.net/">Home</a>
-          <a class="exit-link" href="https://martialgames.net/#games">More games</a>
-          <a class="exit-link" href="https://martialgames.net/tools/">Tools</a>
+          <a class="exit-link" href="https://martialgames.net/#games">Games</a>
+          <a class="exit-link" href="https://martialgames.net/tools/">More tools</a>
         </nav>
       </div>
     </header>
@@ -94,7 +101,7 @@
               <button type="button" class="btn" id="btn-undo">Undo</button>
               <button type="button" class="btn" id="btn-redo">Redo</button>
               <button type="button" class="btn" id="btn-grid">Grid</button>
-              <button type="button" class="btn danger" id="btn-clear">Clear</button>
+              <button type="button" class="btn danger" id="btn-clear" title="Blank canvas and unlink source">Clear canvas</button>
             </div>
           </section>
 
@@ -151,22 +158,10 @@
                 <button type="button" class="btn" id="btn-json" style="justify-content:center">JSON</button>
                 <button type="button" class="btn" id="btn-copy-json" style="justify-content:center">Copy JSON</button>
               </div>
-              <button type="button" class="btn ghost" id="btn-sample" style="justify-content:center">Load sample hero</button>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="range-row">
-              <span class="hint" style="margin:0;text-transform:uppercase;letter-spacing:0.04em;font-weight:500">Import palette size</span>
-              <span class="val" id="max-colors-label">16</span>
-            </div>
-            <input type="range" id="max-colors" min="2" max="256" value="16" aria-label="Import palette size" />
-            <div class="range-ticks">
-              <span>2</span>
-              <button type="button" data-colors="16">16</button>
-              <button type="button" data-colors="64">64</button>
-              <button type="button" data-colors="128">128</button>
-              <span>256</span>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.375rem">
+                <button type="button" class="btn danger" id="btn-clear-export" style="justify-content:center" title="Blank canvas and unlink source">Clear canvas</button>
+                <button type="button" class="btn ghost" id="btn-sample" style="justify-content:center">Load sample hero</button>
+              </div>
             </div>
           </section>
 
@@ -175,7 +170,7 @@
             <input id="file-input" type="file" accept="image/*" class="sr-only" />
           </label>
           <p class="hint">
-            Import links the image (centered, aspect preserved). Drawing starts with a 16-color PICO-8-style retro set until you import.
+            Import links the image (centered, aspect preserved). Extraction uses the left palette size as a <strong>maximum</strong> (e.g. retro 16 → up to 16 colors; a 5-color sprite stays 5 exact colors — no filler shades).
           </p>
 
           <!-- Linked image (hidden until import) -->
@@ -200,7 +195,7 @@
                 <span class="toggle-switch on" aria-hidden="true"><span class="toggle-knob"></span></span>
                 <span>
                   <span class="toggle-label">Auto-update palette</span>
-                  <span class="toggle-desc">Re-extract colors when palette size changes (2–256)</span>
+                  <span class="toggle-desc">Re-extract colors when re-fitting the linked image (matches left palette size)</span>
                 </span>
               </button>
             </div>
@@ -262,9 +257,7 @@
           <p class="hint">
             Agent API: <code style="font-family:var(--mono);color:var(--fg-muted)">POST /api/pixelate</code>
             ·
-            <a href="https://martialgames.net/tools/gridsmith/Gridsmith-API-Guide.pdf" target="_blank" rel="noopener" style="color:var(--fg-muted)">API guide (PDF)</a>
-            ·
-            <a href="https://martialgames.net/" style="color:var(--fg-muted)">More games</a>
+            <a href="Gridsmith-API-Guide.pdf" target="_blank" rel="noopener" style="color:var(--fg-muted)">API guide (PDF)</a>
           </p>
         </div>
       </aside>
