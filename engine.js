@@ -217,74 +217,77 @@ function splitBox(box) {
 }
 
 /**
- * After median-cut, restore exact source colors that are common enough
- * but not near any palette entry (pixel-art flat colors).
+ * After median-cut, restore significant exact source colors that were lost.
+ * Hard ceiling: never returns more than maxColors (replace-only when full).
  */
 function fixupPaletteWithSourceColors(palette, entries, maxColors) {
+  const cap = Math.max(2, Math.min(256, maxColors));
   const total = entries.reduce((s, e) => s + e.count, 0) || 1;
-  // Significant if ≥0.1% of opaque pixels, or at least 4 samples (sprite cells)
   const threshold = Math.max(4, Math.floor(total * 0.001));
   const significant = entries
     .filter((e) => e.count >= threshold)
     .sort((a, b) => b.count - a.count);
 
-  const out = [...palette];
-  const NEAR = 3 * 3; // exact-ish: dist² ≤ 9 (~±3 per channel)
+  // Start from palette, already capped
+  let out = palette.map((h) => h.toLowerCase()).slice(0, cap);
+  const NEAR = 9; // dist² ≤ 9 ≈ ±3/channel
 
   for (const e of significant) {
-    const hex = rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]);
-    const near = out.some((p) => dist2Hex(p, hex) <= NEAR);
-    if (near) continue;
+    if (out.length > cap) out = out.slice(0, cap);
+    const hex = rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]).toLowerCase();
+    if (out.some((p) => dist2Hex(p, hex) <= NEAR)) continue;
 
-    if (out.length < maxColors) {
+    if (out.length < cap) {
       out.push(hex);
       continue;
     }
-    // Replace least-used palette slot that is NOT itself a significant exact color
+
+    // At capacity: replace a non-significant slot (farthest from source colors)
     let worstIdx = -1;
-    let worstScore = Infinity;
+    let worstMinDist = -1;
     for (let i = 0; i < out.length; i++) {
-      const p = out[i];
-      const isExactSig = significant.some(
-        (s) => rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]) === p,
+      const isSig = significant.some(
+        (s) => rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]).toLowerCase() === out[i],
       );
-      if (isExactSig) continue;
-      // score: how often nearest pixels might use this — approximate via distance to significant
-      let score = 0;
+      if (isSig) continue;
+      let minD = Infinity;
       for (const s of significant) {
-        const sh = rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]);
-        if (nearestPaletteColor(s.rgb[0], s.rgb[1], s.rgb[2], [p]) === p) {
-          score += s.count;
-        }
-        void sh;
+        const sh = rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]).toLowerCase();
+        minD = Math.min(minD, dist2Hex(out[i], sh));
       }
-      if (score < worstScore) {
-        worstScore = score;
+      if (minD > worstMinDist) {
+        worstMinDist = minD;
         worstIdx = i;
       }
     }
     if (worstIdx >= 0) out[worstIdx] = hex;
-    else if (out.length > 0) out[out.length - 1] = hex;
+    // else: every slot is a significant exact color already — leave palette as-is
   }
 
-  // unique + sort
   const seen = new Set();
   const uniq = [];
   for (const h of out) {
+    if (uniq.length >= cap) break;
     const k = h.toLowerCase();
     if (seen.has(k)) continue;
     seen.add(k);
-    uniq.push(k.startsWith("#") ? k : `#${k}`);
+    uniq.push(k);
   }
   uniq.sort((a, b) => luminance(a) - luminance(b));
   return uniq.length ? uniq : ["#000000", "#ffffff"];
 }
 
 /**
- * Median-cut palette extraction tuned for flat / pixel-art sources.
- * - If unique exact colors ≤ maxColors, returns those exact hexes (no averaging).
+ * Palette extraction: pure function of (imageData, maxColors) → hex[].
+ *
+ * Semantics of maxColors: **upper bound ("up to N")**, never pad with invented
+ * shades. If the image has 5 flat unique colors and maxColors is 8, returns
+ * those 5 exact hexes (exact-passthrough). Only when unique colors exceed N
+ * do we median-cut / fixup down to at most N.
+ *
+ * - Exact passthrough when unique ≤ maxColors (no averaging).
  * - Never splits perfectly flat clusters.
- * - Fixup pass restores significant exact source colors lost to blending.
+ * - Fixup restores significant source colors but never grows past maxColors.
  */
 export function extractPaletteFromImageData(imageData, options = {}) {
   const maxColors = Math.max(2, Math.min(256, options.maxColors ?? 16));
@@ -314,14 +317,15 @@ export function extractPaletteFromImageData(imageData, options = {}) {
     entries.push({ rgb: keyToRgb(key), count });
   }
 
-  // Pixel-art path: keep exact colors when they fit the budget
+  // Exact passthrough: fewer unique colors than the cap → keep them exact.
+  // Do NOT pad to maxColors with invented near-duplicates.
   if (entries.length <= maxColors) {
     return entries
-      .map((e) => rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]))
+      .map((e) => rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]).toLowerCase())
       .sort((a, b) => luminance(a) - luminance(b));
   }
 
-  // Median-cut on unique colors weighted by count
+  // More unique colors than allowed → weighted median-cut, then fixup ≤ maxColors
   let boxes = [boxFromEntries(entries)];
 
   while (boxes.length < maxColors) {
@@ -338,7 +342,7 @@ export function extractPaletteFromImageData(imageData, options = {}) {
         bestIdx = i;
       }
     }
-    if (bestIdx < 0) break;
+    if (bestIdx < 0) break; // all remaining boxes flat → stop under maxColors
 
     const parts = splitBox(boxes[bestIdx]);
     if (!parts) break;
@@ -353,6 +357,7 @@ export function extractPaletteFromImageData(imageData, options = {}) {
   const seen = new Set();
   const palette = [];
   for (const box of boxes) {
+    if (palette.length >= maxColors) break;
     const hex = averageHexWeighted(box).toLowerCase();
     if (!seen.has(hex)) {
       seen.add(hex);
@@ -360,7 +365,9 @@ export function extractPaletteFromImageData(imageData, options = {}) {
     }
   }
 
-  return fixupPaletteWithSourceColors(palette, entries, maxColors);
+  const fixed = fixupPaletteWithSourceColors(palette, entries, maxColors);
+  // Final hard ceiling (invariant for tests / callers)
+  return fixed.slice(0, maxColors);
 }
 
 export function quantizeImageData(imageData, options) {
