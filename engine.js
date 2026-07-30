@@ -109,43 +109,12 @@ export function floodFill(grid, sx, sy, fillColor) {
   return next;
 }
 
-function boxFromColors(colors) {
-  const sum = [0, 0, 0];
-  for (const c of colors) {
-    sum[0] += c[0];
-    sum[1] += c[1];
-    sum[2] += c[2];
-  }
-  return { colors, sum };
+function colorKey(r, g, b) {
+  return (r << 16) | (g << 8) | b;
 }
 
-function channelRange(colors) {
-  let minR = 255,
-    minG = 255,
-    minB = 255,
-    maxR = 0,
-    maxG = 0,
-    maxB = 0;
-  for (const [r, g, b] of colors) {
-    if (r < minR) minR = r;
-    if (g < minG) minG = g;
-    if (b < minB) minB = b;
-    if (r > maxR) maxR = r;
-    if (g > maxG) maxG = g;
-    if (b > maxB) maxB = b;
-  }
-  const ranges = [
-    [0, maxR - minR],
-    [1, maxG - minG],
-    [2, maxB - minB],
-  ];
-  ranges.sort((a, b) => b[1] - a[1]);
-  return { channel: ranges[0][0], range: ranges[0][1] };
-}
-
-function averageHex(box) {
-  const n = box.colors.length || 1;
-  return rgbToHex(box.sum[0] / n, box.sum[1] / n, box.sum[2] / n);
+function keyToRgb(key) {
+  return [(key >> 16) & 255, (key >> 8) & 255, key & 255];
 }
 
 function luminance(hex) {
@@ -153,98 +122,308 @@ function luminance(hex) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+function dist2Hex(a, b) {
+  const [ar, ag, ab] = hexToRgb(a);
+  const [br, bg, bb] = hexToRgb(b);
+  return (ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2;
+}
+
+/** Weighted color entry for median-cut: { rgb: [r,g,b], count } */
+function boxFromEntries(entries) {
+  let count = 0;
+  const sum = [0, 0, 0];
+  for (const e of entries) {
+    count += e.count;
+    sum[0] += e.rgb[0] * e.count;
+    sum[1] += e.rgb[1] * e.count;
+    sum[2] += e.rgb[2] * e.count;
+  }
+  return { entries, count, sum };
+}
+
+/**
+ * Largest channel range. Flat boxes (all range 0) get range 0 — never split.
+ * Ties: prefer channel with larger secondary range, then G, then R, then B.
+ */
+function channelRangeWeighted(entries) {
+  let minR = 255,
+    minG = 255,
+    minB = 255,
+    maxR = 0,
+    maxG = 0,
+    maxB = 0;
+  for (const { rgb } of entries) {
+    const [r, g, b] = rgb;
+    if (r < minR) minR = r;
+    if (g < minG) minG = g;
+    if (b < minB) minB = b;
+    if (r > maxR) maxR = r;
+    if (g > maxG) maxG = g;
+    if (b > maxB) maxB = b;
+  }
+  const spans = [
+    [0, maxR - minR],
+    [1, maxG - minG],
+    [2, maxB - minB],
+  ];
+  // Prefer largest span; ties: G (1) then R (0) then B (2)
+  const tiePref = { 1: 0, 0: 1, 2: 2 };
+  spans.sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return tiePref[a[0]] - tiePref[b[0]];
+  });
+  return { channel: spans[0][0], range: spans[0][1] };
+}
+
+function averageHexWeighted(box) {
+  const n = box.count || 1;
+  return rgbToHex(box.sum[0] / n, box.sum[1] / n, box.sum[2] / n);
+}
+
+/**
+ * Split box by median of cumulative population along channel.
+ * Never splits flat boxes (range === 0).
+ */
+function splitBox(box) {
+  const { channel, range } = channelRangeWeighted(box.entries);
+  if (range === 0 || box.entries.length < 2) return null;
+
+  const sorted = box.entries.slice().sort((a, b) => {
+    const d = a.rgb[channel] - b.rgb[channel];
+    if (d !== 0) return d;
+    // secondary keys so same-channel values still separate stably
+    const d1 = a.rgb[(channel + 1) % 3] - b.rgb[(channel + 1) % 3];
+    if (d1 !== 0) return d1;
+    return a.rgb[(channel + 2) % 3] - b.rgb[(channel + 2) % 3];
+  });
+
+  const total = box.count;
+  const half = total / 2;
+  let acc = 0;
+  let mid = 1;
+  for (let i = 0; i < sorted.length; i++) {
+    acc += sorted[i].count;
+    if (acc >= half) {
+      mid = Math.max(1, Math.min(sorted.length - 1, i + 1));
+      break;
+    }
+  }
+  if (mid <= 0 || mid >= sorted.length) return null;
+
+  const left = boxFromEntries(sorted.slice(0, mid));
+  const right = boxFromEntries(sorted.slice(mid));
+  if (!left.count || !right.count) return null;
+  return [left, right];
+}
+
+/**
+ * After median-cut, restore exact source colors that are common enough
+ * but not near any palette entry (pixel-art flat colors).
+ */
+function fixupPaletteWithSourceColors(palette, entries, maxColors) {
+  const total = entries.reduce((s, e) => s + e.count, 0) || 1;
+  // Significant if ≥0.1% of opaque pixels, or at least 4 samples (sprite cells)
+  const threshold = Math.max(4, Math.floor(total * 0.001));
+  const significant = entries
+    .filter((e) => e.count >= threshold)
+    .sort((a, b) => b.count - a.count);
+
+  const out = [...palette];
+  const NEAR = 3 * 3; // exact-ish: dist² ≤ 9 (~±3 per channel)
+
+  for (const e of significant) {
+    const hex = rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]);
+    const near = out.some((p) => dist2Hex(p, hex) <= NEAR);
+    if (near) continue;
+
+    if (out.length < maxColors) {
+      out.push(hex);
+      continue;
+    }
+    // Replace least-used palette slot that is NOT itself a significant exact color
+    let worstIdx = -1;
+    let worstScore = Infinity;
+    for (let i = 0; i < out.length; i++) {
+      const p = out[i];
+      const isExactSig = significant.some(
+        (s) => rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]) === p,
+      );
+      if (isExactSig) continue;
+      // score: how often nearest pixels might use this — approximate via distance to significant
+      let score = 0;
+      for (const s of significant) {
+        const sh = rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]);
+        if (nearestPaletteColor(s.rgb[0], s.rgb[1], s.rgb[2], [p]) === p) {
+          score += s.count;
+        }
+        void sh;
+      }
+      if (score < worstScore) {
+        worstScore = score;
+        worstIdx = i;
+      }
+    }
+    if (worstIdx >= 0) out[worstIdx] = hex;
+    else if (out.length > 0) out[out.length - 1] = hex;
+  }
+
+  // unique + sort
+  const seen = new Set();
+  const uniq = [];
+  for (const h of out) {
+    const k = h.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    uniq.push(k.startsWith("#") ? k : `#${k}`);
+  }
+  uniq.sort((a, b) => luminance(a) - luminance(b));
+  return uniq.length ? uniq : ["#000000", "#ffffff"];
+}
+
+/**
+ * Median-cut palette extraction tuned for flat / pixel-art sources.
+ * - If unique exact colors ≤ maxColors, returns those exact hexes (no averaging).
+ * - Never splits perfectly flat clusters.
+ * - Fixup pass restores significant exact source colors lost to blending.
+ */
 export function extractPaletteFromImageData(imageData, options = {}) {
   const maxColors = Math.max(2, Math.min(256, options.maxColors ?? 16));
   const alphaThreshold = options.alphaThreshold ?? 32;
-  const maxSamples = options.maxSamples ?? 8000;
+  const maxSamples = options.maxSamples ?? 12000;
 
   const { data, width, height } = imageData;
   const total = width * height;
-  const step = Math.max(1, Math.floor(total / maxSamples));
-  const samples = [];
+  // Prefer full scan for small images (sprites); step only for large photos
+  const step =
+    total <= maxSamples ? 1 : Math.max(1, Math.floor(total / maxSamples));
 
+  /** @type {Map<number, number>} */
+  const counts = new Map();
   for (let i = 0; i < total; i += step) {
     const si = i * 4;
     const a = data[si + 3];
     if (a < alphaThreshold) continue;
-    samples.push([data[si], data[si + 1], data[si + 2]]);
+    const key = colorKey(data[si], data[si + 1], data[si + 2]);
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
 
-  if (samples.length === 0) return ["#000000", "#ffffff"];
+  if (counts.size === 0) return ["#000000", "#ffffff"];
 
-  let boxes = [boxFromColors(samples)];
+  const entries = [];
+  for (const [key, count] of counts) {
+    entries.push({ rgb: keyToRgb(key), count });
+  }
+
+  // Pixel-art path: keep exact colors when they fit the budget
+  if (entries.length <= maxColors) {
+    return entries
+      .map((e) => rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]))
+      .sort((a, b) => luminance(a) - luminance(b));
+  }
+
+  // Median-cut on unique colors weighted by count
+  let boxes = [boxFromEntries(entries)];
 
   while (boxes.length < maxColors) {
     let bestIdx = -1;
-    let bestRange = -1;
+    let bestScore = -1;
     for (let i = 0; i < boxes.length; i++) {
       const box = boxes[i];
-      if (box.colors.length < 2) continue;
-      const { range } = channelRange(box.colors);
-      const score = range * 1000 + box.colors.length;
-      if (score > bestRange) {
-        bestRange = score;
+      if (box.entries.length < 2) continue;
+      const { range } = channelRangeWeighted(box.entries);
+      if (range === 0) continue; // flat cluster — do not split
+      const score = range * 1e6 + box.count;
+      if (score > bestScore) {
+        bestScore = score;
         bestIdx = i;
       }
     }
     if (bestIdx < 0) break;
 
-    const box = boxes[bestIdx];
-    const { channel } = channelRange(box.colors);
-    const sorted = box.colors.slice().sort((a, b) => a[channel] - b[channel]);
-    const mid = Math.floor(sorted.length / 2);
-    if (mid === 0 || mid >= sorted.length) break;
-
-    const left = boxFromColors(sorted.slice(0, mid));
-    const right = boxFromColors(sorted.slice(mid));
-    boxes = [...boxes.slice(0, bestIdx), left, right, ...boxes.slice(bestIdx + 1)];
+    const parts = splitBox(boxes[bestIdx]);
+    if (!parts) break;
+    boxes = [
+      ...boxes.slice(0, bestIdx),
+      parts[0],
+      parts[1],
+      ...boxes.slice(bestIdx + 1),
+    ];
   }
 
   const seen = new Set();
   const palette = [];
   for (const box of boxes) {
-    const hex = averageHex(box);
+    const hex = averageHexWeighted(box).toLowerCase();
     if (!seen.has(hex)) {
       seen.add(hex);
       palette.push(hex);
     }
   }
 
-  palette.sort((a, b) => luminance(a) - luminance(b));
-  if (palette.length === 0) return ["#000000", "#ffffff"];
-  return palette;
+  return fixupPaletteWithSourceColors(palette, entries, maxColors);
 }
 
 export function quantizeImageData(imageData, options) {
   const { width: tw, height: th } = options;
   const alphaThreshold = options.alphaThreshold ?? 32;
   const palette = options.palette ?? RETRO_PALETTE;
-  const fit = options.fit ?? "contain";
+  let fit = options.fit ?? "contain";
+  if (fit === "cover" || fit === "contain" || fit === "stretch") {
+    /* ok */
+  } else {
+    // unknown fit mode — do not silently stretch
+    fit = "contain";
+  }
   const sw = imageData.width;
   const sh = imageData.height;
   const src = imageData.data;
   const pixels = new Array(tw * th);
 
-  let destW = tw;
-  let destH = th;
+  // contain: letterbox inside dest
+  // cover: scale to fill dest, crop overflow (CSS background-size: cover)
+  // stretch: map full source to full dest
+  let mode = fit;
+  let srcX0 = 0;
+  let srcY0 = 0;
+  let srcW = sw;
+  let srcH = sh;
   let destX = 0;
   let destY = 0;
-  if (fit === "contain" && sw > 0 && sh > 0) {
+  let destW = tw;
+  let destH = th;
+
+  if (sw > 0 && sh > 0 && mode === "contain") {
     const scale = Math.min(tw / sw, th / sh);
     destW = Math.max(1, Math.round(sw * scale));
     destH = Math.max(1, Math.round(sh * scale));
     destX = Math.floor((tw - destW) / 2);
     destY = Math.floor((th - destH) / 2);
+  } else if (sw > 0 && sh > 0 && mode === "cover") {
+    const scale = Math.max(tw / sw, th / sh);
+    srcW = tw / scale;
+    srcH = th / scale;
+    srcX0 = (sw - srcW) / 2;
+    srcY0 = (sh - srcH) / 2;
   }
 
   for (let y = 0; y < th; y++) {
     for (let x = 0; x < tw; x++) {
       let sx;
       let sy;
-      if (fit === "stretch") {
+      if (mode === "stretch") {
         sx = Math.min(sw - 1, Math.floor(((x + 0.5) / tw) * sw));
         sy = Math.min(sh - 1, Math.floor(((y + 0.5) / th) * sh));
+      } else if (mode === "cover") {
+        sx = Math.min(
+          sw - 1,
+          Math.max(0, Math.floor(srcX0 + ((x + 0.5) / tw) * srcW)),
+        );
+        sy = Math.min(
+          sh - 1,
+          Math.max(0, Math.floor(srcY0 + ((y + 0.5) / th) * srcH)),
+        );
       } else {
+        // contain
         if (x < destX || y < destY || x >= destX + destW || y >= destY + destH) {
           pixels[y * tw + x] = null;
           continue;
@@ -407,9 +586,31 @@ export function gridToSvg(grid, options = {}) {
         while (x + run < w && grid.pixels[y * w + x + run] === c) run++;
       }
       const list = byColor.get(c) ?? [];
-      list.push({ x, y, w: run });
+      list.push({ x, y, w: run, h: 1 });
       byColor.set(c, list);
       x += run;
+    }
+  }
+
+  // Merge vertically stacked runs with same x/width (solid blocks → fewer rects)
+  if (mergeRuns) {
+    for (const [color, rects] of byColor) {
+      rects.sort((a, b) => a.x - b.x || a.y - b.y);
+      const merged = [];
+      for (const r of rects) {
+        const prev = merged[merged.length - 1];
+        if (
+          prev &&
+          prev.x === r.x &&
+          prev.w === r.w &&
+          prev.y + prev.h === r.y
+        ) {
+          prev.h += r.h;
+        } else {
+          merged.push({ ...r });
+        }
+      }
+      byColor.set(color, merged);
     }
   }
 
@@ -417,7 +618,7 @@ export function gridToSvg(grid, options = {}) {
     parts.push(`  <g fill="${escapeXml(color)}" data-color="${escapeXml(color)}">`);
     for (const r of rects) {
       parts.push(
-        `    <rect x="${r.x * unit}" y="${r.y * unit}" width="${r.w * unit}" height="${unit}"/>`,
+        `    <rect x="${r.x * unit}" y="${r.y * unit}" width="${r.w * unit}" height="${r.h * unit}"/>`,
       );
     }
     parts.push(`  </g>`);
@@ -437,6 +638,31 @@ export function gridToJson(grid, pretty = false) {
   return pretty ? JSON.stringify(body, null, 2) : JSON.stringify(body);
 }
 
+const PIXEL_HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+
+function normalizePixelColor(p) {
+  if (p === null || p === undefined || p === "" || p === "transparent") return null;
+  if (typeof p !== "string") throw new Error("Invalid pixel color (expected hex string or null)");
+  const s = p.trim();
+  if (s === "transparent") return null;
+  if (!PIXEL_HEX_RE.test(s)) {
+    throw new Error(`Invalid pixel color "${p}" (use #rgb, #rrggbb, or #rrggbbaa)`);
+  }
+  // normalize #rgb → #rrggbb lowercase for consistent SVG / palette
+  let h = s.slice(1).toLowerCase();
+  if (h.length === 3) {
+    h = h
+      .split("")
+      .map((c) => c + c)
+      .join("");
+  }
+  if (h.length === 8) {
+    // drop alpha for grid cells (opaque art); keep rgb only
+    h = h.slice(0, 6);
+  }
+  return `#${h}`;
+}
+
 export function parseGridJson(raw) {
   if (!raw || typeof raw !== "object") throw new Error("Invalid grid: expected object");
   const width = Number(raw.width);
@@ -450,10 +676,6 @@ export function parseGridJson(raw) {
   if (!Array.isArray(raw.pixels) || raw.pixels.length !== width * height) {
     throw new Error(`Invalid grid: pixels must be array of length ${width * height}`);
   }
-  const pixels = raw.pixels.map((p) => {
-    if (p === null || p === undefined || p === "" || p === "transparent") return null;
-    if (typeof p !== "string") throw new Error("Invalid pixel color");
-    return p;
-  });
+  const pixels = raw.pixels.map((p) => normalizePixelColor(p));
   return { width, height, pixels };
 }
