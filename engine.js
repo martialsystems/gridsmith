@@ -109,51 +109,24 @@ export function floodFill(grid, sx, sy, fillColor) {
   return next;
 }
 
-function colorKey(r, g, b) {
-  return (r << 16) | (g << 8) | b;
-}
-
-function keyToRgb(key) {
-  return [(key >> 16) & 255, (key >> 8) & 255, key & 255];
-}
-
-function luminance(hex) {
-  const [r, g, b] = hexToRgb(hex);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-
-function dist2Hex(a, b) {
-  const [ar, ag, ab] = hexToRgb(a);
-  const [br, bg, bb] = hexToRgb(b);
-  return (ar - br) ** 2 + (ag - bg) ** 2 + (ab - bb) ** 2;
-}
-
-/** Weighted color entry for median-cut: { rgb: [r,g,b], count } */
-function boxFromEntries(entries) {
-  let count = 0;
+function boxFromColors(colors) {
   const sum = [0, 0, 0];
-  for (const e of entries) {
-    count += e.count;
-    sum[0] += e.rgb[0] * e.count;
-    sum[1] += e.rgb[1] * e.count;
-    sum[2] += e.rgb[2] * e.count;
+  for (const c of colors) {
+    sum[0] += c[0];
+    sum[1] += c[1];
+    sum[2] += c[2];
   }
-  return { entries, count, sum };
+  return { colors, sum };
 }
 
-/**
- * Largest channel range. Flat boxes (all range 0) get range 0 — never split.
- * Ties: prefer channel with larger secondary range, then G, then R, then B.
- */
-function channelRangeWeighted(entries) {
+function channelRange(colors) {
   let minR = 255,
     minG = 255,
     minB = 255,
     maxR = 0,
     maxG = 0,
     maxB = 0;
-  for (const { rgb } of entries) {
-    const [r, g, b] = rgb;
+  for (const [r, g, b] of colors) {
     if (r < minR) minR = r;
     if (g < minG) minG = g;
     if (b < minB) minB = b;
@@ -161,195 +134,103 @@ function channelRangeWeighted(entries) {
     if (g > maxG) maxG = g;
     if (b > maxB) maxB = b;
   }
-  const spans = [
+  const ranges = [
     [0, maxR - minR],
     [1, maxG - minG],
     [2, maxB - minB],
   ];
-  // Prefer largest span; ties: G (1) then R (0) then B (2)
-  const tiePref = { 1: 0, 0: 1, 2: 2 };
-  spans.sort((a, b) => {
-    if (b[1] !== a[1]) return b[1] - a[1];
-    return tiePref[a[0]] - tiePref[b[0]];
-  });
-  return { channel: spans[0][0], range: spans[0][1] };
+  ranges.sort((a, b) => b[1] - a[1]);
+  return { channel: ranges[0][0], range: ranges[0][1] };
 }
 
-function averageHexWeighted(box) {
-  const n = box.count || 1;
+function averageHex(box) {
+  const n = box.colors.length || 1;
   return rgbToHex(box.sum[0] / n, box.sum[1] / n, box.sum[2] / n);
 }
 
-/**
- * Split box by median of cumulative population along channel.
- * Never splits flat boxes (range === 0).
- */
-function splitBox(box) {
-  const { channel, range } = channelRangeWeighted(box.entries);
-  if (range === 0 || box.entries.length < 2) return null;
-
-  const sorted = box.entries.slice().sort((a, b) => {
-    const d = a.rgb[channel] - b.rgb[channel];
-    if (d !== 0) return d;
-    // secondary keys so same-channel values still separate stably
-    const d1 = a.rgb[(channel + 1) % 3] - b.rgb[(channel + 1) % 3];
-    if (d1 !== 0) return d1;
-    return a.rgb[(channel + 2) % 3] - b.rgb[(channel + 2) % 3];
-  });
-
-  const total = box.count;
-  const half = total / 2;
-  let acc = 0;
-  let mid = 1;
-  for (let i = 0; i < sorted.length; i++) {
-    acc += sorted[i].count;
-    if (acc >= half) {
-      mid = Math.max(1, Math.min(sorted.length - 1, i + 1));
-      break;
-    }
-  }
-  if (mid <= 0 || mid >= sorted.length) return null;
-
-  const left = boxFromEntries(sorted.slice(0, mid));
-  const right = boxFromEntries(sorted.slice(mid));
-  if (!left.count || !right.count) return null;
-  return [left, right];
+function luminance(hex) {
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 /**
- * After median-cut, restore significant exact source colors that were lost.
- * Hard ceiling: never returns more than maxColors (replace-only when full).
- */
-function fixupPaletteWithSourceColors(palette, entries, maxColors) {
-  const cap = Math.max(2, Math.min(256, maxColors));
-  const total = entries.reduce((s, e) => s + e.count, 0) || 1;
-  const threshold = Math.max(4, Math.floor(total * 0.001));
-  const significant = entries
-    .filter((e) => e.count >= threshold)
-    .sort((a, b) => b.count - a.count);
-
-  // Start from palette, already capped
-  let out = palette.map((h) => h.toLowerCase()).slice(0, cap);
-  const NEAR = 9; // dist² ≤ 9 ≈ ±3/channel
-
-  for (const e of significant) {
-    if (out.length > cap) out = out.slice(0, cap);
-    const hex = rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]).toLowerCase();
-    if (out.some((p) => dist2Hex(p, hex) <= NEAR)) continue;
-
-    if (out.length < cap) {
-      out.push(hex);
-      continue;
-    }
-
-    // At capacity: replace a non-significant slot (farthest from source colors)
-    let worstIdx = -1;
-    let worstMinDist = -1;
-    for (let i = 0; i < out.length; i++) {
-      const isSig = significant.some(
-        (s) => rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]).toLowerCase() === out[i],
-      );
-      if (isSig) continue;
-      let minD = Infinity;
-      for (const s of significant) {
-        const sh = rgbToHex(s.rgb[0], s.rgb[1], s.rgb[2]).toLowerCase();
-        minD = Math.min(minD, dist2Hex(out[i], sh));
-      }
-      if (minD > worstMinDist) {
-        worstMinDist = minD;
-        worstIdx = i;
-      }
-    }
-    if (worstIdx >= 0) out[worstIdx] = hex;
-    // else: every slot is a significant exact color already — leave palette as-is
-  }
-
-  const seen = new Set();
-  const uniq = [];
-  for (const h of out) {
-    if (uniq.length >= cap) break;
-    const k = h.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    uniq.push(k);
-  }
-  uniq.sort((a, b) => luminance(a) - luminance(b));
-  return uniq.length ? uniq : ["#000000", "#ffffff"];
-}
-
-/**
- * Palette extraction: pure function of (imageData, maxColors) → hex[].
+ * Classic median-cut palette extraction (good default for photos + art).
  *
- * Semantics of maxColors: **upper bound ("up to N")**, never pad with invented
- * shades. If the image has 5 flat unique colors and maxColors is 8, returns
- * those 5 exact hexes (exact-passthrough). Only when unique colors exceed N
- * do we median-cut / fixup down to at most N.
+ * maxColors is an **upper bound** (up to N). If the image has few exact unique
+ * colors (≤ maxColors) — typical flat sprites — those hexes are returned as-is
+ * (no averaging, no padding). Otherwise median-cut averages boxes as usual.
  *
- * - Exact passthrough when unique ≤ maxColors (no averaging).
- * - Never splits perfectly flat clusters.
- * - Fixup restores significant source colors but never grows past maxColors.
+ * No "fixup" pass: that path was restored exact flat colors for sprites but
+ * flooded photo palettes with near-duplicate midtones.
  */
 export function extractPaletteFromImageData(imageData, options = {}) {
   const maxColors = Math.max(2, Math.min(256, options.maxColors ?? 16));
   const alphaThreshold = options.alphaThreshold ?? 32;
-  const maxSamples = options.maxSamples ?? 12000;
+  const maxSamples = options.maxSamples ?? 8000;
 
   const { data, width, height } = imageData;
   const total = width * height;
-  // Prefer full scan for small images (sprites); step only for large photos
-  const step =
-    total <= maxSamples ? 1 : Math.max(1, Math.floor(total / maxSamples));
+  const step = Math.max(1, Math.floor(total / maxSamples));
+  const samples = [];
+  /** @type {Map<string, true>} */
+  const unique = new Map();
 
-  /** @type {Map<number, number>} */
-  const counts = new Map();
   for (let i = 0; i < total; i += step) {
     const si = i * 4;
     const a = data[si + 3];
     if (a < alphaThreshold) continue;
-    const key = colorKey(data[si], data[si + 1], data[si + 2]);
-    counts.set(key, (counts.get(key) || 0) + 1);
+    const r = data[si];
+    const g = data[si + 1];
+    const b = data[si + 2];
+    samples.push([r, g, b]);
+    unique.set(`${r},${g},${b}`, true);
   }
 
-  if (counts.size === 0) return ["#000000", "#ffffff"];
+  if (samples.length === 0) return ["#000000", "#ffffff"];
 
-  const entries = [];
-  for (const [key, count] of counts) {
-    entries.push({ rgb: keyToRgb(key), count });
+  // Exact passthrough for discrete sprites (≤ cap unique colors)
+  if (unique.size > 0 && unique.size <= maxColors) {
+    // Prefer full-image unique when small enough to scan fully
+    if (total <= maxSamples * 2 || step === 1) {
+      return [...unique.keys()]
+        .map((k) => {
+          const [r, g, b] = k.split(",").map(Number);
+          return rgbToHex(r, g, b).toLowerCase();
+        })
+        .sort((a, b) => luminance(a) - luminance(b));
+    }
   }
 
-  // Exact passthrough: fewer unique colors than the cap → keep them exact.
-  // Do NOT pad to maxColors with invented near-duplicates.
-  if (entries.length <= maxColors) {
-    return entries
-      .map((e) => rgbToHex(e.rgb[0], e.rgb[1], e.rgb[2]).toLowerCase())
-      .sort((a, b) => luminance(a) - luminance(b));
-  }
-
-  // More unique colors than allowed → weighted median-cut, then fixup ≤ maxColors
-  let boxes = [boxFromEntries(entries)];
+  let boxes = [boxFromColors(samples)];
 
   while (boxes.length < maxColors) {
     let bestIdx = -1;
-    let bestScore = -1;
+    let bestRange = -1;
     for (let i = 0; i < boxes.length; i++) {
       const box = boxes[i];
-      if (box.entries.length < 2) continue;
-      const { range } = channelRangeWeighted(box.entries);
-      if (range === 0) continue; // flat cluster — do not split
-      const score = range * 1e6 + box.count;
-      if (score > bestScore) {
-        bestScore = score;
+      if (box.colors.length < 2) continue;
+      const { range } = channelRange(box.colors);
+      if (range === 0) continue;
+      const score = range * 1000 + box.colors.length;
+      if (score > bestRange) {
+        bestRange = score;
         bestIdx = i;
       }
     }
-    if (bestIdx < 0) break; // all remaining boxes flat → stop under maxColors
+    if (bestIdx < 0) break;
 
-    const parts = splitBox(boxes[bestIdx]);
-    if (!parts) break;
+    const box = boxes[bestIdx];
+    const { channel } = channelRange(box.colors);
+    const sorted = box.colors.slice().sort((a, b) => a[channel] - b[channel]);
+    const mid = Math.floor(sorted.length / 2);
+    if (mid === 0 || mid >= sorted.length) break;
+
+    const left = boxFromColors(sorted.slice(0, mid));
+    const right = boxFromColors(sorted.slice(mid));
     boxes = [
       ...boxes.slice(0, bestIdx),
-      parts[0],
-      parts[1],
+      left,
+      right,
       ...boxes.slice(bestIdx + 1),
     ];
   }
@@ -357,17 +238,16 @@ export function extractPaletteFromImageData(imageData, options = {}) {
   const seen = new Set();
   const palette = [];
   for (const box of boxes) {
-    if (palette.length >= maxColors) break;
-    const hex = averageHexWeighted(box).toLowerCase();
+    const hex = averageHex(box).toLowerCase();
     if (!seen.has(hex)) {
       seen.add(hex);
       palette.push(hex);
     }
   }
 
-  const fixed = fixupPaletteWithSourceColors(palette, entries, maxColors);
-  // Final hard ceiling (invariant for tests / callers)
-  return fixed.slice(0, maxColors);
+  palette.sort((a, b) => luminance(a) - luminance(b));
+  if (palette.length === 0) return ["#000000", "#ffffff"];
+  return palette.slice(0, maxColors);
 }
 
 export function quantizeImageData(imageData, options) {
