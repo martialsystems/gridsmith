@@ -1,5 +1,6 @@
 # Gridsmith
 
+Consider [donating](https://ko-fi.com/martialgames) to help us keep these repos free and open-source.
 **Retro pixel art → crisp, scalable SVG.**
 
 Static browser editor + a small dependency-free JS library (`engine.js`) for
