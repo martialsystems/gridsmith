@@ -29,6 +29,8 @@ Self-hosted forks are welcome under MIT; they are **not** the official endpoint.
 Play free games on [Martial Games](https://martialgames.net/) — Gridsmith is one
 of the tools on that site.
 
+**Support Martial Games (optional):** [ko-fi.com/martialgames](https://ko-fi.com/martialgames)
+
 ## Brand assets
 
 | File | Role |
